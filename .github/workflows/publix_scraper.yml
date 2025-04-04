@@ -14,12 +14,12 @@ jobs:
       matrix:
         # Define 5 concurrent jobs with script ranges
         batch:
-          - { id: 0, start: 0, end: 9 }    # Only run 10 scripts per batch to account for long runtime
+          - { id: 0, start: 0, end: 9 }
           - { id: 1, start: 10, end: 19 }
           - { id: 2, start: 20, end: 29 }
           - { id: 3, start: 30, end: 39 }
           - { id: 4, start: 40, end: 49 }
-      fail-fast: false # Continue running other jobs if one fails
+      fail-fast: false
       
     steps:
       # Checkout the repository
@@ -39,12 +39,18 @@ jobs:
           pip install playwright
           playwright install --with-deps chromium
 
+      # Create output directory
+      - name: Create output directory
+        run: mkdir -p outputs
+
       # List scripts for debugging
       - name: List available scripts
         run: |
           echo "Available scripts:"
           ls -la publix_*.py || echo "No matching scripts found"
           echo "Total script count: $(ls -la publix_*.py 2>/dev/null | wc -l)"
+          echo "CSV files before running:"
+          find . -name "*.csv" -type f | sort || echo "No CSV files found"
 
       # Run scripts in the assigned batch
       - name: Run scripts
@@ -63,23 +69,51 @@ jobs:
           
           echo "Found ${#scripts[@]} scripts. Running batch from $start_index to $end_index"
           
-          # Run scripts in the assigned range with a maximum timeout per script
+          # Run scripts in the assigned range
           for ((i=start_index; i<=end_index && i<${#scripts[@]}; i++)); do
             echo "Running ${scripts[$i]}"
             echo "Started at $(date)"
-            timeout 300m python "${scripts[$i]}" || echo "Script ${scripts[$i]} failed or timed out"
+            
+            # Create a dummy CSV in case script fails
+            echo "script,status,timestamp" > outputs/batch_${i}_${scripts[$i]%.py}.csv
+            echo "${scripts[$i]},started,$(date +%s)" >> outputs/batch_${i}_${scripts[$i]%.py}.csv
+            
+            # Run the script with timeout
+            timeout 300m python "${scripts[$i]}" || {
+              echo "Script ${scripts[$i]} failed or timed out with exit code $?"
+              echo "${scripts[$i]},failed,$(date +%s)" >> outputs/batch_${i}_${scripts[$i]%.py}.csv
+            }
+            
             echo "Finished at $(date)"
+            echo "${scripts[$i]},completed,$(date +%s)" >> outputs/batch_${i}_${scripts[$i]%.py}.csv
           done
-        env:
-          PYTHONUNBUFFERED: 1
 
-      # Upload results
-      - name: Upload results
+      # List files after running
+      - name: List files after running
+        if: always()
+        run: |
+          echo "Current directory:"
+          ls -la
+          echo "CSV files after running:"
+          find . -name "*.csv" -type f | sort || echo "No CSV files found"
+          echo "Contents of outputs directory:"
+          ls -la outputs/ || echo "Outputs directory not found"
+
+      # Upload all CSVs in repository
+      - name: Upload all CSVs
         if: always()
         uses: actions/upload-artifact@v2
         with:
           name: publix-data-batch-${{ matrix.batch.id }}
           path: |
-            *.csv
-            results_*.csv
+            **/*.csv
+          if-no-files-found: warn
+
+      # Upload tracking files specifically
+      - name: Upload tracking files
+        if: always()
+        uses: actions/upload-artifact@v2
+        with:
+          name: publix-tracking-batch-${{ matrix.batch.id }}
+          path: outputs/*.csv
           if-no-files-found: warn

@@ -1,0 +1,109 @@
+name: Publix Scraper Workflow
+
+on:
+  schedule:
+    # Runs every Tuesday at 05:01 UTC (00:01 Eastern Standard Time)
+    - cron: '1 5 * * 2'
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  scrape-publix:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # Define 5 concurrent jobs with script ranges
+        batch:
+          - { id: 0, start: 0, end: 50 }
+          - { id: 1, start: 51, end: 101 }
+          - { id: 2, start: 102, end: 152 }
+          - { id: 3, start: 153, end: 203 }
+          - { id: 4, start: 204, end: 253 }
+      max-parallel: 5 # Run all 5 jobs concurrently
+      fail-fast: false # Continue running other jobs if one fails
+
+    steps:
+      # Checkout the repository
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Set up Python
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      # Install dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright pytest
+          playwright install --with-deps chromium
+          # Install other dependencies your scripts might need
+          pip install csv datetime time
+
+      # Check what files exist (for debugging)
+      - name: List available scripts
+        run: |
+          echo "Available Python scripts:"
+          ls -la *.py || echo "No Python scripts found in root directory"
+          find . -name "*.py" -type f | sort
+          echo "Available CSV files:"
+          find . -name "*.csv" -type f | sort
+
+      # Run a single test script (for debugging)
+      - name: Run test script
+        run: |
+          cat > test_playwright.py << 'EOF'
+          from playwright.sync_api import sync_playwright
+          
+          def test_browser():
+              with sync_playwright() as p:
+                  browser = p.chromium.launch(headless=True)
+                  page = browser.new_page()
+                  page.goto('https://example.com')
+                  print(f"Title: {page.title()}")
+                  browser.close()
+          
+          if __name__ == "__main__":
+              test_browser()
+          EOF
+          
+          python test_playwright.py
+
+      # Run scripts in the assigned batch
+      - name: Run Publix scraper scripts
+        run: |
+          # Find all publix scripts
+          SCRIPTS=$(find . -name "publix_*.py" -type f | sort)
+          SCRIPT_ARRAY=($SCRIPTS)
+          
+          # Calculate start and end indices
+          START_INDEX=${{ matrix.batch.start }}
+          END_INDEX=${{ matrix.batch.end }}
+          
+          echo "Found ${#SCRIPT_ARRAY[@]} scripts. Running batch from $START_INDEX to $END_INDEX"
+          
+          # Run scripts in the assigned range (only if files exist)
+          if [ ${#SCRIPT_ARRAY[@]} -gt 0 ]; then
+            for ((i=START_INDEX; i<=END_INDEX && i<${#SCRIPT_ARRAY[@]}; i++)); do
+              echo "Running ${SCRIPT_ARRAY[$i]}"
+              python "${SCRIPT_ARRAY[$i]}" || echo "Script ${SCRIPT_ARRAY[$i]} failed with exit code $?"
+            done
+          else
+            echo "No publix scripts found to run"
+            exit 1
+          fi
+        env:
+          PYTHONUNBUFFERED: 1
+          # Ensure we're using headless mode for Playwright
+          PLAYWRIGHT_HEADLESS: true
+
+      # Upload results as artifacts (with error handling)
+      - name: Upload CSV results
+        if: always()  # Try to upload artifacts even if previous steps failed
+        uses: actions/upload-artifact@v3
+        with:
+          name: publix-data-batch-${{ matrix.batch.id }}
+          path: |
+            **/*.csv
+          if-no-files-found: warn  # Just warn, don't fail if no CSVs are found

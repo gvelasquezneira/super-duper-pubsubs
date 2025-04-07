@@ -1,0 +1,76 @@
+name: Publix Scraper Workflow
+
+on:
+  schedule:
+    # Runs every Tuesday at 05:01 UTC (00:01 Eastern Standard Time)
+    - cron: '1 6 * * 2'
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  scrape-publix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 hours maximum per job
+
+    steps:
+      # Checkout the repository
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Set up Python
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      # Install dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+          playwright install --with-deps chromium
+
+      # Create output directory
+      - name: Create output directory
+        run: mkdir -p outputs
+
+      # Verify input file exists
+      - name: Check input file
+        run: |
+          if [ ! -f "publix_locations.csv" ]; then
+            echo "Error: publix_locations.csv not found!"
+            exit 1
+          fi
+          echo "Found publix_locations.csv with $(wc -l < publix_locations.csv) lines"
+
+      # Run the scraper script
+      - name: Run scraper
+        run: |
+          echo "Starting scraper at $(date)"
+          # Run the script with a timeout slightly under 6 hours to allow cleanup
+          timeout 350m python scraper.py || {
+            echo "Scraper failed or timed out with exit code $?"
+            exit 1
+          }
+          echo "Scraper completed at $(date)"
+
+      # List files after running
+      - name: List files after running
+        if: always()
+        run: |
+          echo "Current directory:"
+          ls -la
+          echo "CSV files after running:"
+          find . -name "*.csv" -type f | sort || echo "No CSV files found"
+          echo "Contents of outputs directory:"
+          ls -la outputs/ || echo "Outputs directory not found"
+
+      # Upload all CSV outputs
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publix-scraper-results
+          path: |
+            *.csv
+            outputs/*.csv
+          if-no-files-found: warn

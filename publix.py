@@ -457,7 +457,7 @@ def main():
     lock = manager.Lock()
 
     # Limit the number of processes
-    num_processes = min(multiprocessing.cpu_count(), 105) 
+    num_processes = min(multiprocessing.cpu_count(), 200) 
     # Create a pool of workers
     with multiprocessing.Pool(processes=num_processes) as pool:
         # Create tasks with location and worker_id

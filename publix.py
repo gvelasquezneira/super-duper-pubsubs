@@ -358,13 +358,6 @@ def process_location(location_data, urls, output_file, lock, headless=False):
             # Save data for this location
             if all_data:
                 append_to_csv(output_file, all_data, lock)
-                
-                # Also save to location-specific file as backup
-                location_file = f"publix_data_{location.replace(', ', '_')}_{datetime.now().strftime('%Y%m%d')}.csv"
-                with open(location_file, 'w', newline='', encoding='utf-8') as f:
-                    writer = csv.writer(f)
-                    writer.writerow(['Location', 'Category', 'Product Name', 'Price', 'Ounces', 'Date'])
-                    writer.writerows(all_data)
             else:
                 print(f"Worker {worker_id}: No data collected for {location}")
             
@@ -457,7 +450,7 @@ def main():
     lock = manager.Lock()
 
     # Limit the number of processes
-    num_processes = min(multiprocessing.cpu_count(), 200) 
+    num_processes = min(multiprocessing.cpu_count(), 105) 
     # Create a pool of workers
     with multiprocessing.Pool(processes=num_processes) as pool:
         # Create tasks with location and worker_id

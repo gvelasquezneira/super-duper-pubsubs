@@ -47,7 +47,7 @@ jobs:
         run: |
           echo "Starting scraper at $(date)"
           # Run the script with a timeout slightly under 6 hours to allow cleanup
-          timeout 350m python scraper.py || {
+          timeout 350m python publix.py || {
             echo "Scraper failed or timed out with exit code $?"
             exit 1
           }

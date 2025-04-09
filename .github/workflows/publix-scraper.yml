@@ -7,14 +7,93 @@ on:
   workflow_dispatch: # Allows manual triggering
 
 jobs:
+  split-locations:
+    runs-on: ubuntu-latest
+    outputs:
+      total_jobs: ${{ steps.count-jobs.outputs.total_jobs }}
+    steps:
+      # Checkout the repository
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Set up Python
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      # Verify input file exists and split locations
+      - name: Split locations into 20 subsets
+        id: split-locations
+        run: |
+          if [ ! -f "publix_locations.csv" ]; then
+            echo "Error: publix_locations.csv not found!"
+            exit 1
+          fi
+
+          # Create directory for split files
+          mkdir -p location_splits
+
+          # Count total lines (excluding header)
+          total_lines=$(($(wc -l < publix_locations.csv) - 1))
+          echo "Total locations (excluding header): $total_lines"
+
+          # Calculate lines per split (20 jobs)
+          lines_per_split=$(( (total_lines + 19) / 20 ))  # Ceiling division
+          if [ $lines_per_split -lt 1 ]; then
+            lines_per_split=1
+          fi
+          echo "Lines per split: $lines_per_split"
+
+          # Keep the header for each split file
+          header=$(head -n 1 publix_locations.csv)
+
+          # Split the file (excluding header) into 20 parts
+          tail -n +2 publix_locations.csv | split -l $lines_per_split - location_splits/split_
+
+          # Add header to each split file and rename with .csv extension
+          for file in location_splits/split_*; do
+            mv "$file" "$file.csv"
+            echo "$header" | cat - "$file.csv" > temp && mv temp "$file.csv"
+          done
+
+          # Count the number of split files (should be 20 or less)
+          total_jobs=$(ls location_splits/split_*.csv | wc -l)
+          echo "Total jobs created: $total_jobs"
+
+          # Set output for the next job
+          echo "total_jobs=$total_jobs" >> $GITHUB_OUTPUT
+
+      # Upload split files as artifacts
+      - name: Upload split location files
+        uses: actions/upload-artifact@v4
+        with:
+          name: location-splits
+          path: location_splits/*.csv
+          if-no-files-found: error
+
   scrape-publix:
+    needs: split-locations
     runs-on: ubuntu-latest
     timeout-minutes: 360  # 6 hours maximum per job
+
+    # Use a matrix to run 20 jobs
+    strategy:
+      matrix:
+        job_index: ${{ fromJson(range(0, needs.split-locations.outputs.total_jobs)) }}
+      max-parallel: 20  # Run all 20 jobs concurrently
 
     steps:
       # Checkout the repository
       - name: Checkout code
         uses: actions/checkout@v3
+
+      # Download split location files
+      - name: Download split location files
+        uses: actions/download-artifact@v4
+        with:
+          name: location-splits
+          path: location_splits
 
       # Set up Python
       - name: Set up Python
@@ -33,25 +112,29 @@ jobs:
       - name: Create output directory
         run: mkdir -p outputs
 
-      # Verify input file exists
-      - name: Check input file
+      # Verify split file exists for this job
+      - name: Check split file
         run: |
-          if [ ! -f "publix_locations.csv" ]; then
-            echo "Error: publix_locations.csv not found!"
+          split_file="location_splits/split_aa${{ matrix.job_index }}.csv"
+          if [ ! -f "$split_file" ]; then
+            echo "Error: Split file $split_file not found!"
             exit 1
           fi
-          echo "Found publix_locations.csv with $(wc -l < publix_locations.csv) lines"
+          echo "Found $split_file with $(wc -l < $split_file) lines"
 
-      # Run the scraper script
+      # Run the scraper script for this job's locations
       - name: Run scraper
         run: |
-          echo "Starting scraper at $(date)"
-          # Run the script with a timeout slightly under 6 hours to allow cleanup
-          timeout 350m python publix.py || {
+          echo "Starting scraper for job ${{ matrix.job_index }} at $(date)"
+          split_file="location_splits/split_aa${{ matrix.job_index }}.csv"
+          # Copy the split file to publix_locations.csv for the script to use
+          cp "$split_file" publix_locations.csv
+          # Run the script with 2 workers per job and a timeout
+          timeout 350m python publix.py --workers 2 || {
             echo "Scraper failed or timed out with exit code $?"
             exit 1
           }
-          echo "Scraper completed at $(date)"
+          echo "Scraper completed for job ${{ matrix.job_index }} at $(date)"
 
       # List files after running
       - name: List files after running
@@ -64,13 +147,53 @@ jobs:
           echo "Contents of outputs directory:"
           ls -la outputs/ || echo "Outputs directory not found"
 
-      # Upload all CSV outputs
+      # Upload CSV output for this job
       - name: Upload results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: publix-scraper-results
+          name: publix-scraper-results-${{ matrix.job_index }}
           path: |
             *.csv
             outputs/*.csv
           if-no-files-found: warn
+
+  combine-results:
+    needs: scrape-publix
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout the repository
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Download all scraper results
+      - name: Download scraper results
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      # Combine CSV files
+      - name: Combine CSV files
+        run: |
+          echo "Combining CSV files..."
+          # Create final output file with header
+          final_output="publix_combined_data_$(date +%Y%m%d).csv"
+          # Find one CSV to get the header
+          first_csv=$(find artifacts -name "*.csv" -type f | head -n 1)
+          if [ -z "$first_csv" ]; then
+            echo "No CSV files found to combine!"
+            exit 1
+          fi
+          head -n 1 "$first_csv" > "$final_output"
+          # Append all CSV contents (excluding headers)
+          find artifacts -name "*.csv" -type f -exec tail -n +2 {} \; >> "$final_output"
+          echo "Combined CSV created: $final_output"
+          echo "Total lines in combined CSV: $(wc -l < $final_output)"
+
+      # Upload combined CSV
+      - name: Upload combined results
+        uses: actions/upload-artifact@v4
+        with:
+          name: publix-combined-results
+          path: publix_combined_data_*.csv
+          if-no-files-found: error

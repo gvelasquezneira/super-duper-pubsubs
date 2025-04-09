@@ -11,7 +11,7 @@ jobs:
     outputs:
       matrix: ${{ steps.split-locations.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/actions/upload-artifact@v4
       
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -44,7 +44,7 @@ jobs:
           echo "matrix={\"part\":[1,2,3,4,5,6,7,8]}" >> $GITHUB_OUTPUT
           
       - name: Upload split files
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: split-location-files
           path: temp_locations
@@ -58,7 +58,7 @@ jobs:
       matrix: ${{fromJson(needs.setup.outputs.matrix)}}
     
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/actions/upload-artifact@v4
       
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -66,7 +66,7 @@ jobs:
           python-version: '3.10'
           
       - name: Download split location files
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           name: split-location-files
           path: temp_locations
@@ -93,7 +93,7 @@ jobs:
           python publix.py --workers 1
           
       - name: Upload results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: publix-data-part-${{ matrix.part }}
           path: publix_targeted_data_*.csv
@@ -103,7 +103,7 @@ jobs:
     needs: scrape
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/actions/upload-artifact@v4
       
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -111,7 +111,7 @@ jobs:
           python-version: '3.10'
           
       - name: Download all artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
           
@@ -139,7 +139,7 @@ jobs:
           echo "Combined file created with $(wc -l < combined/publix_targeted_data_${DATE}_combined.csv) lines"
           
       - name: Upload combined results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: publix-combined-data
           path: combined/publix_targeted_data_*_combined.csv

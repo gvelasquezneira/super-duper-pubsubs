@@ -10,7 +10,8 @@ jobs:
   split-locations:
     runs-on: ubuntu-latest
     outputs:
-      total_jobs: ${{ steps.count-jobs.outputs.total_jobs }}
+      total_jobs: ${{ steps.split-locations.outputs.total_jobs }}
+      job_indices: ${{ steps.split-locations.outputs.job_indices }}
     steps:
       # Checkout the repository
       - name: Checkout code
@@ -38,7 +39,7 @@ jobs:
           total_lines=$(($(wc -l < publix_locations.csv) - 1))
           echo "Total locations (excluding header): $total_lines"
 
-          # Calculate lines per split (20 jobs)
+          # Calculate lines per split (20 jobs max)
           lines_per_split=$(( (total_lines + 19) / 20 ))  # Ceiling division
           if [ $lines_per_split -lt 1 ]; then
             lines_per_split=1
@@ -61,10 +62,15 @@ jobs:
           total_jobs=$(ls location_splits/split_*.csv | wc -l)
           echo "Total jobs created: $total_jobs"
 
-          # Set output for the next job
-          echo "total_jobs=$total_jobs" >> $GITHUB_OUTPUT
+          # Generate job indices [0, 1, ..., total_jobs-1]
+          job_indices=$(seq 0 $((total_jobs - 1)) | jq -c --slurp .)
+          echo "Job indices: $job_indices"
 
-      # Upload split files as artifacts
+          # Set outputs
+          echo "total_jobs=$total_jobs" >> $GITHUB_OUTPUT
+          echo "job_indices=$job_indices" >> $GITHUB_OUTPUT
+
+      # Upload split location files as artifacts
       - name: Upload split location files
         uses: actions/upload-artifact@v4
         with:
@@ -77,11 +83,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360  # 6 hours maximum per job
 
-    # Use a matrix to run 20 jobs
+    # Use a matrix to run up to 20 jobs
     strategy:
       matrix:
-        job_index: ${{ fromJson(range(0, needs.split-locations.outputs.total_jobs)) }}
-      max-parallel: 20  # Run all 20 jobs concurrently
+        job_index: ${{ fromJson(needs.split-locations.outputs.job_indices) }}
+      max-parallel: 20  # Run all jobs concurrently
 
     steps:
       # Checkout the repository

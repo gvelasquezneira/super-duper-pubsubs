@@ -11,7 +11,7 @@ jobs:
     outputs:
       matrix: ${{ steps.split-locations.outputs.matrix }}
     steps:
-      - uses: actions/actions/upload-artifact@v4
+      - uses: actions/checkout@v3
       
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -58,7 +58,7 @@ jobs:
       matrix: ${{fromJson(needs.setup.outputs.matrix)}}
     
     steps:
-      - uses: actions/actions/upload-artifact@v4
+      - uses: actions/checkout@v3
       
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -103,7 +103,7 @@ jobs:
     needs: scrape
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/actions/upload-artifact@v4
+      - uses: actions/checkout@v3
       
       - name: Set up Python
         uses: actions/setup-python@v4

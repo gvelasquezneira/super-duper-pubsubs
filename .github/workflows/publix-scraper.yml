@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: '3.10'
           
-      - name: Split locations file into 8 parts
+      - name: Split locations file into 20 parts
         id: split-locations
         run: |
           # Create a temporary directory
@@ -28,16 +28,16 @@ jobs:
           TOTAL=$(tail -n +2 publix_locations.csv | wc -l)
           
           # Calculate lines per file (ceiling division)
-          PER_FILE=$(( (TOTAL + 7) / 8 ))
+          PER_FILE=$(( (TOTAL + 19) / 20 ))
           
           # Split the file with fixed naming
           head -n 1 publix_locations.csv > header.csv
           tail -n +2 publix_locations.csv > data.csv
           
           # Split into numbered parts
-          for i in {1..8}; do
+          for i in {1..20}; do
             START_LINE=$(( (i-1) * PER_FILE + 1 ))
-            if [ $i -lt 8 ]; then
+            if [ $i -lt 20 ]; then
               END_LINE=$(( i * PER_FILE ))
               sed -n "${START_LINE},${END_LINE}p" data.csv > "temp_locations/part_${i}.csv"
             else
@@ -48,8 +48,8 @@ jobs:
             cat header.csv "temp_locations/part_${i}.csv" > "temp_locations/locations_part_${i}.csv"
           done
           
-          # Create matrix output
-          echo "matrix={\"part\":[1,2,3,4,5,6,7,8]}" >> $GITHUB_OUTPUT
+          # Create matrix output for 20 parts
+          echo "matrix={\"part\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]}" >> $GITHUB_OUTPUT
           
       - name: Upload split files
         uses: actions/upload-artifact@v4
@@ -134,7 +134,7 @@ jobs:
           echo 'Location,Category,Product Name,Price,Ounces,Date' > combined/publix_targeted_data_${DATE}_combined.csv
           
           # Append all data files (skipping headers)
-          for part in {1..8}; do
+          for part in {1..20}; do
             # Look for the files in the artifact directories
             FILE=$(find artifacts/publix-data-part-$part -name "publix_targeted_data_*.csv" -type f | head -1)
             if [ -f "$FILE" ]; then

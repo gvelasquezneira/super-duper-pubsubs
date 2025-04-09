@@ -30,14 +30,22 @@ jobs:
           # Calculate lines per file (ceiling division)
           PER_FILE=$(( (TOTAL + 7) / 8 ))
           
-          # Split the file (keeping header in each file)
+          # Split the file with fixed naming
           head -n 1 publix_locations.csv > header.csv
           tail -n +2 publix_locations.csv > data.csv
-          split -l $PER_FILE data.csv temp_locations/part_
           
-          # Add header to each split file
-          for file in temp_locations/part_*; do
-            cat header.csv "$file" > "${file}_with_header.csv"
+          # Split into numbered parts
+          for i in {1..8}; do
+            START_LINE=$(( (i-1) * PER_FILE + 1 ))
+            if [ $i -lt 8 ]; then
+              END_LINE=$(( i * PER_FILE ))
+              sed -n "${START_LINE},${END_LINE}p" data.csv > "temp_locations/part_${i}.csv"
+            else
+              # Last part gets all remaining lines
+              sed -n "${START_LINE},\$p" data.csv > "temp_locations/part_${i}.csv"
+            fi
+            # Add header
+            cat header.csv "temp_locations/part_${i}.csv" > "temp_locations/locations_part_${i}.csv"
           done
           
           # Create matrix output
@@ -80,12 +88,11 @@ jobs:
           
       - name: Create part-specific locations file
         run: |
-          # Find the right part file and use it as publix_locations.csv
-          PART_FILE=$(find temp_locations -name "*part_*${matrix.part}*_with_header.csv" -type f | head -1)
-          cp "$PART_FILE" publix_locations.csv
+          # Use the specific part file with consistent naming
+          cp "temp_locations/locations_part_${{ matrix.part }}.csv" publix_locations.csv
           
           # Check how many locations we're processing
-          echo "Processing these locations for part ${matrix.part}:"
+          echo "Processing these locations for part ${{ matrix.part }}:"
           cat publix_locations.csv
           
       - name: Run Publix scraper
@@ -128,10 +135,13 @@ jobs:
           
           # Append all data files (skipping headers)
           for part in {1..8}; do
+            # Look for the files in the artifact directories
             FILE=$(find artifacts/publix-data-part-$part -name "publix_targeted_data_*.csv" -type f | head -1)
             if [ -f "$FILE" ]; then
               echo "Adding data from $FILE"
               tail -n +2 "$FILE" >> combined/publix_targeted_data_${DATE}_combined.csv
+            else
+              echo "Warning: No data file found for part $part"
             fi
           done
           

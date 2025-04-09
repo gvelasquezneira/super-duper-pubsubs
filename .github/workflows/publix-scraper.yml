@@ -80,7 +80,7 @@ jobs:
           python publix.py --workers 1
           
       - name: Upload results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: publix-data-part-${{ matrix.part }}
           path: publix_targeted_data_*.csv
@@ -98,7 +98,7 @@ jobs:
           python-version: '3.10'
           
       - name: Download all artifacts
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
         with:
           path: artifacts
           
@@ -126,7 +126,7 @@ jobs:
           echo "Combined file created with $(wc -l < combined/publix_targeted_data_${DATE}_combined.csv) lines"
           
       - name: Upload combined results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: publix-combined-data
           path: combined/publix_targeted_data_*_combined.csv

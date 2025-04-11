@@ -1,61 +1,65 @@
 name: Publix Data Collection
 
 on:
+  workflow_dispatch:
   schedule:
-    - cron: '1 6 * * 2'  # Runs at 6:01 AM every Tuesday
-  workflow_dispatch:  # Allows manual triggering
+    - cron: '0 10 * * *'  # Run daily at 10:00 UTC
 
 jobs:
   setup:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.split-locations.outputs.matrix }}
+      matrix: ${{ steps.create-matrix.outputs.matrix }}
+    
     steps:
-      - uses: actions/checkout@v3
-      
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-          
-      - name: Split locations file into 20 parts
-        id: split-locations
+
+      - name: Split locations into parts
         run: |
-          # Create a temporary directory
           mkdir -p temp_locations
           
           # Count total number of locations (excluding header)
           TOTAL=$(tail -n +2 publix_locations.csv | wc -l)
+          echo "Total locations: $TOTAL"
           
           # Calculate lines per file (ceiling division)
           PER_FILE=$(( (TOTAL + 19) / 20 ))
+          echo "Locations per file: $PER_FILE"
           
           # Split the file with fixed naming
           head -n 1 publix_locations.csv > header.csv
           tail -n +2 publix_locations.csv > data.csv
           
-          # Split into numbered parts
-          for i in {1..20}; do
-            START_LINE=$(( (i-1) * PER_FILE + 1 ))
-            if [ $i -lt 20 ]; then
-              END_LINE=$(( i * PER_FILE ))
-              sed -n "${START_LINE},${END_LINE}p" data.csv > "temp_locations/part_${i}.csv"
-            else
-              # Last part gets all remaining lines
-              sed -n "${START_LINE},\$p" data.csv > "temp_locations/part_${i}.csv"
-            fi
-            # Add header
-            cat header.csv "temp_locations/part_${i}.csv" > "temp_locations/locations_part_${i}.csv"
+          # Split data into parts
+          split -l $PER_FILE data.csv part_
+          
+          # Add header to each part and move to temp_locations
+          for file in part_*; do
+            cat header.csv "$file" > "temp_locations/locations_${file}.csv"
+            echo "Created temp_locations/locations_${file}.csv with $(wc -l < "temp_locations/locations_${file}.csv") lines"
           done
           
-          # Create matrix output for 20 parts
-          echo "matrix={\"part\":[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]}" >> $GITHUB_OUTPUT
+          # List all created parts
+          ls -la temp_locations/
           
-      - name: Upload split files
+          # Count parts for matrix
+          PARTS=$(ls temp_locations/locations_part_* | wc -l)
+          echo "Total parts created: $PARTS"
+          
+          # Create matrix JSON for dynamic job creation
+          echo "matrix=$(for i in $(seq 1 $PARTS); do echo -n "\"part_$(printf %02d $i)\" "; done | xargs -n $PARTS echo | sed 's/ /","/g;s/^/{"part":["/;s/$/"]}/')" >> $GITHUB_OUTPUT
+
+      - name: Upload location parts
         uses: actions/upload-artifact@v4
         with:
-          name: split-location-files
-          path: temp_locations
+          name: location-parts
+          path: temp_locations/
           retention-days: 1
 
   scrape:
@@ -64,90 +68,106 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{fromJson(needs.setup.outputs.matrix)}}
-    
+
     steps:
-      - uses: actions/checkout@v3
-      
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
-          
-      - name: Download split location files
+
+      - name: Download location parts
         uses: actions/download-artifact@v4
         with:
-          name: split-location-files
+          name: location-parts
           path: temp_locations
-          
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install playwright
           python -m playwright install chromium
           python -m playwright install-deps
-          
-      - name: Create part-specific locations file
+
+      - name: Verify part file
         run: |
-          # Use the specific part file with consistent naming
-          cp "temp_locations/locations_part_${{ matrix.part }}.csv" publix_locations.csv
-          
-          # Check how many locations we're processing
-          echo "Processing these locations for part ${{ matrix.part }}:"
-          cat publix_locations.csv
-          
+          echo "Processing part ${{ matrix.part }}"
+          echo "File contents:"
+          cat "temp_locations/locations_${{ matrix.part }}.csv"
+          echo "Number of locations in this part: $(tail -n +2 temp_locations/locations_${{ matrix.part }}.csv | wc -l)"
+
       - name: Run Publix scraper
         run: |
-          python publix.py --workers 1
+          # Copy the specific part file to use as input
+          cp "temp_locations/locations_${{ matrix.part }}.csv" input_locations.csv
           
-      - name: Upload results
+          # Run scraper with this part's locations
+          python publix.py --input_file input_locations.csv --output_file "results_${{ matrix.part }}.csv" --workers 1 --headless true
+          
+          # Check results
+          if [ -f "results_${{ matrix.part }}.csv" ]; then
+            echo "Results file created with $(wc -l < results_${{ matrix.part }}.csv) lines"
+            echo "Unique locations in results: $(tail -n +2 results_${{ matrix.part }}.csv | cut -d',' -f2 | sort | uniq | wc -l)"
+          else
+            echo "Warning: No results file was created!"
+            # Create empty file to avoid errors in later steps
+            echo "Header,Location,Product,Price,Sale,Link,Image" > "results_${{ matrix.part }}.csv"
+          fi
+
+      - name: Upload part results
         uses: actions/upload-artifact@v4
         with:
-          name: publix-data-part-${{ matrix.part }}
-          path: publix_targeted_data_*.csv
+          name: publix-data-${{ matrix.part }}
+          path: results_${{ matrix.part }}.csv
           retention-days: 30
 
   combine:
     needs: scrape
     runs-on: ubuntu-latest
+    
     steps:
-      - uses: actions/checkout@v3
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.10'
-          
-      - name: Download all artifacts
+      - name: Download all results
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
-          
+          path: ./results
+          pattern: publix-data-*
+          merge-multiple: true
+      
       - name: Combine results
         run: |
-          # Create output directory
           mkdir -p combined
-          
-          # Get today's date in YYYYMMDD format
           DATE=$(date +%Y%m%d)
           
-          # Create a combined file with headers
-          echo 'Location,Category,Product Name,Price,Ounces,Date' > combined/publix_targeted_data_${DATE}_combined.csv
+          # List all result files
+          echo "Found result files:"
+          find ./results -name "*.csv" | sort
           
-          # Append all data files (skipping headers)
-          for part in {1..20}; do
-            # Look for the files in the artifact directories
-            FILE=$(find artifacts/publix-data-part-$part -name "publix_targeted_data_*.csv" -type f | head -1)
-            if [ -f "$FILE" ]; then
-              echo "Adding data from $FILE"
-              tail -n +2 "$FILE" >> combined/publix_targeted_data_${DATE}_combined.csv
-            else
-              echo "Warning: No data file found for part $part"
+          # Create header in output file
+          echo "Header,Location,Product,Price,Sale,Link,Image" > "combined/publix_targeted_data_${DATE}_combined.csv"
+          
+          # Append data from all files (skipping headers)
+          for file in $(find ./results -name "*.csv" | sort); do
+            if [ -f "$file" ]; then
+              echo "Processing $file"
+              tail -n +2 "$file" >> "combined/publix_targeted_data_${DATE}_combined.csv"
             fi
           done
           
-          # Check the combined file
-          echo "Combined file created with $(wc -l < combined/publix_targeted_data_${DATE}_combined.csv) lines"
+          # Count results
+          TOTAL_LINES=$(wc -l < "combined/publix_targeted_data_${DATE}_combined.csv")
+          DATA_LINES=$((TOTAL_LINES - 1))  # Subtract header line
+          echo "Combined file created with $TOTAL_LINES lines ($DATA_LINES data rows)"
           
+          # Count unique locations
+          UNIQUE_LOCATIONS=$(tail -n +2 "combined/publix_targeted_data_${DATE}_combined.csv" | cut -d',' -f2 | sort | uniq | wc -l)
+          echo "Unique locations in combined results: $UNIQUE_LOCATIONS"
+          
+          # List the unique locations (first 10)
+          echo "First 10 unique locations:"
+          tail -n +2 "combined/publix_targeted_data_${DATE}_combined.csv" | cut -d',' -f2 | sort | uniq | head -n 10
+
       - name: Upload combined results
         uses: actions/upload-artifact@v4
         with:

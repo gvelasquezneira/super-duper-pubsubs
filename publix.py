@@ -532,8 +532,10 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                             page.wait_for_timeout(800)  # Reduced from 1000 to improve performance
                     except:
                         pass
+
+                    store_id = generate_store_id(location)
                     
-                    deli_data = scrape_deli_items(page, location, category)
+                    deli_data = scrape_deli_items(page, location, category, store_id)
                     all_data.extend(deli_data)
                 except Exception as e:
                     continue

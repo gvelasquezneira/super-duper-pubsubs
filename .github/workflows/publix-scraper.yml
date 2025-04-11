@@ -37,33 +37,23 @@ jobs:
           head -n 1 publix_locations.csv > header.csv
           tail -n +2 publix_locations.csv > data.csv
           
-          # Split data into parts
-          split -l $PER_FILE data.csv part_
+          # Split data into parts (up to 20)
+          split -l $PER_FILE data.csv temp_locations/part_
           
-          # Add header to each part and move to temp_locations
-          PARTS=0
-          for file in part_*; do
-            PARTS=$((PARTS+1))
-            PART_NAME=$(printf "part_%02d" $PARTS)
-            cat header.csv "$file" > "temp_locations/locations_${PART_NAME}.csv"
-            echo "Created temp_locations/locations_${PART_NAME}.csv with $(wc -l < "temp_locations/locations_${PART_NAME}.csv") lines"
+          # Add header to each part
+          for file in temp_locations/part_*; do
+            cat header.csv "$file" > "$file.csv"
+            rm "$file"  # Remove the headerless file
+            mv "$file.csv" "$file"
+            echo "Created $file with $(wc -l < "$file") lines"
           done
           
-          # Create matrix JSON for dynamic job creation
-          echo "matrix={\"part\":[" >> $GITHUB_OUTPUT
-          for i in $(seq 1 $PARTS); do
-            PART_NAME=$(printf "part_%02d" $i)
-            if [ $i -eq $PARTS ]; then
-              echo "\"$PART_NAME\"" >> $GITHUB_OUTPUT
-            else
-              echo "\"$PART_NAME\"," >> $GITHUB_OUTPUT
-            fi
-          done
-          echo "]}" >> $GITHUB_OUTPUT
+          # Create a simple fixed matrix output
+          # This avoids issues with dynamic JSON construction
+          echo "matrix={\"part\":[\"aa\",\"ab\",\"ac\",\"ad\",\"ae\",\"af\",\"ag\",\"ah\",\"ai\",\"aj\",\"ak\",\"al\",\"am\",\"an\",\"ao\",\"ap\",\"aq\",\"ar\",\"as\",\"at\"]}" >> $GITHUB_OUTPUT
           
-          # Verify the output
-          echo "Generated matrix output:"
-          cat $GITHUB_OUTPUT
+          # List created files
+          ls -la temp_locations/
 
       - name: Upload location parts
         uses: actions/upload-artifact@v4
@@ -101,16 +91,25 @@ jobs:
           python -m playwright install chromium
           python -m playwright install-deps
 
-      - name: Verify part file
+      - name: Verify and process file
         run: |
           echo "Processing part ${{ matrix.part }}"
-          echo "File exists: $(test -f temp_locations/locations_${{ matrix.part }}.csv && echo "Yes" || echo "No")"
-          echo "Number of locations in this part: $(test -f temp_locations/locations_${{ matrix.part }}.csv && tail -n +2 temp_locations/locations_${{ matrix.part }}.csv | wc -l || echo "File not found")"
-
-      - name: Run Publix scraper
-        run: |
-          # Copy the specific part file to use as input
-          cp "temp_locations/locations_${{ matrix.part }}.csv" input_locations.csv
+          
+          # Find the file to process
+          PART_FILE=$(ls temp_locations/part_${{ matrix.part }}* 2>/dev/null || echo "")
+          
+          if [ -z "$PART_FILE" ]; then
+            echo "No file found for part ${{ matrix.part }}"
+            echo "Available files:"
+            ls -la temp_locations/
+            exit 0  # Skip this job if no file exists
+          fi
+          
+          echo "Found file: $PART_FILE"
+          echo "Number of locations: $(tail -n +2 "$PART_FILE" | wc -l)"
+          
+          # Copy to input locations
+          cp "$PART_FILE" input_locations.csv
           
           # Run scraper with this part's locations
           python publix.py --input_file input_locations.csv --output_file "results_${{ matrix.part }}.csv" --workers 1 --headless true
@@ -118,7 +117,6 @@ jobs:
           # Check results
           if [ -f "results_${{ matrix.part }}.csv" ]; then
             echo "Results file created with $(wc -l < results_${{ matrix.part }}.csv) lines"
-            echo "Unique locations in results: $(tail -n +2 results_${{ matrix.part }}.csv | cut -d',' -f3 | sort | uniq | wc -l)"
           else
             echo "Warning: No results file was created!"
             # Create empty file to avoid errors in later steps
@@ -172,14 +170,6 @@ jobs:
           # Count unique locations
           UNIQUE_LOCATIONS=$(tail -n +2 "combined/publix_targeted_data_${DATE}_combined.csv" | cut -d',' -f3 | sort | uniq | wc -l)
           echo "Unique locations in combined results: $UNIQUE_LOCATIONS"
-          
-          # Count unique store IDs
-          UNIQUE_STORES=$(tail -n +2 "combined/publix_targeted_data_${DATE}_combined.csv" | cut -d',' -f2 | sort | uniq | wc -l)
-          echo "Unique store IDs in combined results: $UNIQUE_STORES"
-          
-          # List the first 10 unique locations
-          echo "First 10 unique locations:"
-          tail -n +2 "combined/publix_targeted_data_${DATE}_combined.csv" | cut -d',' -f3 | sort | uniq | head -n 10
 
       - name: Upload combined results
         uses: actions/upload-artifact@v4

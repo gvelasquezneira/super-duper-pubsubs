@@ -3,7 +3,7 @@ name: Publix Data Collection
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 10 * * *'  # Run daily at 10:00 UTC
+    - cron: '1 6 * * 2'
 
 jobs:
   setup:
@@ -21,6 +21,7 @@ jobs:
           python-version: '3.10'
 
       - name: Split locations into parts
+        id: create-matrix
         run: |
           mkdir -p temp_locations
           
@@ -40,20 +41,29 @@ jobs:
           split -l $PER_FILE data.csv part_
           
           # Add header to each part and move to temp_locations
+          PARTS=0
           for file in part_*; do
-            cat header.csv "$file" > "temp_locations/locations_${file}.csv"
-            echo "Created temp_locations/locations_${file}.csv with $(wc -l < "temp_locations/locations_${file}.csv") lines"
+            PARTS=$((PARTS+1))
+            PART_NAME=$(printf "part_%02d" $PARTS)
+            cat header.csv "$file" > "temp_locations/locations_${PART_NAME}.csv"
+            echo "Created temp_locations/locations_${PART_NAME}.csv with $(wc -l < "temp_locations/locations_${PART_NAME}.csv") lines"
           done
           
-          # List all created parts
-          ls -la temp_locations/
-          
-          # Count parts for matrix
-          PARTS=$(ls temp_locations/locations_part_* | wc -l)
-          echo "Total parts created: $PARTS"
-          
           # Create matrix JSON for dynamic job creation
-          echo "matrix=$(for i in $(seq 1 $PARTS); do echo -n "\"part_$(printf %02d $i)\" "; done | xargs -n $PARTS echo | sed 's/ /","/g;s/^/{"part":["/;s/$/"]}/')" >> $GITHUB_OUTPUT
+          echo "matrix={\"part\":[" >> $GITHUB_OUTPUT
+          for i in $(seq 1 $PARTS); do
+            PART_NAME=$(printf "part_%02d" $i)
+            if [ $i -eq $PARTS ]; then
+              echo "\"$PART_NAME\"" >> $GITHUB_OUTPUT
+            else
+              echo "\"$PART_NAME\"," >> $GITHUB_OUTPUT
+            fi
+          done
+          echo "]}" >> $GITHUB_OUTPUT
+          
+          # Verify the output
+          echo "Generated matrix output:"
+          cat $GITHUB_OUTPUT
 
       - name: Upload location parts
         uses: actions/upload-artifact@v4
@@ -94,9 +104,8 @@ jobs:
       - name: Verify part file
         run: |
           echo "Processing part ${{ matrix.part }}"
-          echo "File contents:"
-          cat "temp_locations/locations_${{ matrix.part }}.csv"
-          echo "Number of locations in this part: $(tail -n +2 temp_locations/locations_${{ matrix.part }}.csv | wc -l)"
+          echo "File exists: $(test -f temp_locations/locations_${{ matrix.part }}.csv && echo "Yes" || echo "No")"
+          echo "Number of locations in this part: $(test -f temp_locations/locations_${{ matrix.part }}.csv && tail -n +2 temp_locations/locations_${{ matrix.part }}.csv | wc -l || echo "File not found")"
 
       - name: Run Publix scraper
         run: |
@@ -109,11 +118,11 @@ jobs:
           # Check results
           if [ -f "results_${{ matrix.part }}.csv" ]; then
             echo "Results file created with $(wc -l < results_${{ matrix.part }}.csv) lines"
-            echo "Unique locations in results: $(tail -n +2 results_${{ matrix.part }}.csv | cut -d',' -f2 | sort | uniq | wc -l)"
+            echo "Unique locations in results: $(tail -n +2 results_${{ matrix.part }}.csv | cut -d',' -f3 | sort | uniq | wc -l)"
           else
             echo "Warning: No results file was created!"
             # Create empty file to avoid errors in later steps
-            echo "Header,Location,Product,Price,Sale,Link,Image" > "results_${{ matrix.part }}.csv"
+            echo "ID,Store ID,Location,Category,Product Name,Price,Size,Date" > "results_${{ matrix.part }}.csv"
           fi
 
       - name: Upload part results
@@ -145,7 +154,7 @@ jobs:
           find ./results -name "*.csv" | sort
           
           # Create header in output file
-          echo "Header,Location,Product,Price,Sale,Link,Image" > "combined/publix_targeted_data_${DATE}_combined.csv"
+          echo "ID,Store ID,Location,Category,Product Name,Price,Size,Date" > "combined/publix_targeted_data_${DATE}_combined.csv"
           
           # Append data from all files (skipping headers)
           for file in $(find ./results -name "*.csv" | sort); do
@@ -161,12 +170,16 @@ jobs:
           echo "Combined file created with $TOTAL_LINES lines ($DATA_LINES data rows)"
           
           # Count unique locations
-          UNIQUE_LOCATIONS=$(tail -n +2 "combined/publix_targeted_data_${DATE}_combined.csv" | cut -d',' -f2 | sort | uniq | wc -l)
+          UNIQUE_LOCATIONS=$(tail -n +2 "combined/publix_targeted_data_${DATE}_combined.csv" | cut -d',' -f3 | sort | uniq | wc -l)
           echo "Unique locations in combined results: $UNIQUE_LOCATIONS"
           
-          # List the unique locations (first 10)
+          # Count unique store IDs
+          UNIQUE_STORES=$(tail -n +2 "combined/publix_targeted_data_${DATE}_combined.csv" | cut -d',' -f2 | sort | uniq | wc -l)
+          echo "Unique store IDs in combined results: $UNIQUE_STORES"
+          
+          # List the first 10 unique locations
           echo "First 10 unique locations:"
-          tail -n +2 "combined/publix_targeted_data_${DATE}_combined.csv" | cut -d',' -f2 | sort | uniq | head -n 10
+          tail -n +2 "combined/publix_targeted_data_${DATE}_combined.csv" | cut -d',' -f3 | sort | uniq | head -n 10
 
       - name: Upload combined results
         uses: actions/upload-artifact@v4

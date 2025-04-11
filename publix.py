@@ -8,6 +8,8 @@ from functools import partial
 import traceback
 import random
 import argparse
+import hashlib
+import re
 
 # Define the target products to find in each category
 TARGET_PRODUCTS = {
@@ -136,7 +138,8 @@ TARGET_PRODUCTS = {
         "publix milk whole",
         "publix milk reduced fat 2% milkfat",
         "silk soy milk original",
-        "publix milk chocolate"
+        "publix milk chocolate", 
+        "%"
     ],
     "Pasta": [
         "publix spaghetti",
@@ -207,28 +210,24 @@ def extract_item_details(deli_item, location):
     product_name = grocery_div.inner_text() if grocery_div.count() > 0 else "Not found"
 
     ozs_div = deli_item.locator('div.e-an4oxa').first
-    ounces = ozs_div.inner_text() if ozs_div.count() > 0 else "Not found"
+    size = ozs_div.inner_text() if ozs_div.count() > 0 else "Not found"
 
     return {
         "Location": location,
         "Product Name": product_name,
-        "Price": f"${price}" if not price.startswith("$") else price,
-        "Ounces": ounces
+        "Price": price,  
+        "Size": size  
     }
 
 def scroll_to_load_all_items(page):
     last_height = page.evaluate("document.body.scrollHeight")
-    max_scroll_attempts = 5  # Reduced from 10 to improve performance
+    max_scroll_attempts = 5 
     scroll_attempts = 0
     
     while scroll_attempts < max_scroll_attempts:
-        # Scroll down to bottom
         page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
         
-        # Wait to load more content
-        page.wait_for_timeout(800)  # Reduced from 1000 to improve performance
-        
-        # Calculate new scroll height and compare with last scroll height
+        page.wait_for_timeout(800)  
         new_height = page.evaluate("document.body.scrollHeight")
         if new_height == last_height:
             page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
@@ -239,7 +238,7 @@ def scroll_to_load_all_items(page):
         last_height = new_height
         scroll_attempts += 1
         
-    # Check for "Show More" or "Load More" buttons
+    # Check for "Load More" buttons
     try:
         load_more = page.locator("button:has-text('Load More')").first
         if load_more.count() > 0 and load_more.is_visible():
@@ -247,14 +246,12 @@ def scroll_to_load_all_items(page):
     except Exception as e:
         pass 
 
-def navigate_with_retry(page, url, max_retries=2):  # Reduced from 3 to improve performance
+def navigate_with_retry(page, url, max_retries=2): 
     """Navigate to URL with retry logic"""
     for attempt in range(max_retries):
         try:
             page.goto(url, wait_until="domcontentloaded")
-            page.wait_for_timeout(800)  # Reduced from 1000 to improve performance
-            
-            # Check if page loaded correctly
+            page.wait_for_timeout(800) 
             if page.url.startswith(url.split("?")[0]):  
                 return True
             else:
@@ -265,21 +262,38 @@ def navigate_with_retry(page, url, max_retries=2):  # Reduced from 3 to improve 
     print(f"Failed to navigate to {url} after {max_retries} attempts")
     return False
 
+
 def is_target_product(product_name, category):
     """Check if the product is one of our target products for this category"""
     if category not in TARGET_PRODUCTS:
         return False
         
     product_name_lower = product_name.lower()
-    
-    # Check if product name contains any of our target keywords for this category
+
     for target in TARGET_PRODUCTS[category]:
         if target in product_name_lower:
             return True
     
     return False
 
-def scrape_deli_items(page, location, category):
+def clean_price(price_str):
+    """Convert price string to float, removing $ and any other non-numeric characters except decimal."""
+    if price_str == "Not found":
+        return ""
+    
+    price_match = re.search(r'(\d+\.\d+|\d+)', price_str)
+    if price_match:
+        return float(price_match.group(1))
+    return ""
+
+def generate_store_id(location):
+    """Generate a consistent unique ID for a store location."""
+    # Use MD5 hash of location string to generate a unique but consistent ID
+    hash_obj = hashlib.md5(location.encode())
+
+    return hash_obj.hexdigest()[:8]
+
+def scrape_deli_items(page, location, category, store_id):
     """Enhanced scraping function that filters for target products only"""
     scroll_to_load_all_items(page)
     
@@ -316,33 +330,48 @@ def scrape_deli_items(page, location, category):
                 product_name = name_element.inner_text() if name_element.count() > 0 else "Not found"
                 price = price_element.inner_text() if price_element.count() > 0 else "Not found"
                 
-                # Try to find ounces information
-                ozs_element = item.locator('div.e-an4oxa, .product-size').first
-                ounces = ozs_element.inner_text() if ozs_element.count() > 0 else "Not found"
+                # Try to find size information (previously ounces)
+                size_element = item.locator('div.e-an4oxa, .product-size').first
+                size = size_element.inner_text() if size_element.count() > 0 else "Not found"
                 
                 # Only add if it's a target product
                 if is_target_product(product_name, category):
+                    # Generate unique row ID with timestamp and index
+                    row_id = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{i}"
+                    
+                    # Clean price to remove $ and convert to float
+                    clean_price_val = clean_price(price)
+                    
                     row = [
+                        row_id,              # Unique ID for row
+                        store_id,            # Unique store ID
                         location,
                         category,
                         product_name,
-                        price,
-                        ounces,
+                        clean_price_val,     # Price as float without $
+                        size,                # Renamed from "ounces"
                         current_date
                     ]
                     deli_data.append(row)
             else:
-                # Use original extraction logic
                 item_details = extract_item_details(item, location)
                 
                 # Only add if it's a target product
                 if is_target_product(item_details["Product Name"], category):
+                    # Generate unique row ID with timestamp and index
+                    row_id = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{i}"
+                    
+                    # Clean price to remove $ and convert to float
+                    clean_price_val = clean_price(item_details["Price"])
+                    
                     row = [
+                        row_id,            
+                        store_id,           
                         item_details["Location"],
                         category,
                         item_details["Product Name"],
-                        item_details["Price"],
-                        item_details["Ounces"],
+                        clean_price_val,  
+                        item_details["Size"],
                         current_date
                     ]
                     deli_data.append(row)
@@ -525,26 +554,27 @@ def process_location(location_data, urls, output_file, lock, headless=True):
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description='Scrape Publix product data')
+    parser.add_argument('--input_file', type=str, default='publix_locations.csv', help='Input CSV with locations')
+    parser.add_argument('--output_file', type=str, default=f'publix_targeted_data_{datetime.now().strftime("%Y%m%d")}.csv', help='Output CSV file')
+    parser.add_argument('--workers', type=int, default=2, help='Number of worker processes (0=auto)')
     parser.add_argument('--debug', action='store_true', help='Run in debug mode (slower, more verbose)')
-    parser.add_argument('--workers', type=int, default=2, help='Number of worker processes (1 = auto)')
+    parser.add_argument('--headless', type=lambda x: (str(x).lower() in ['true', '1']), default=True, help='Run in headless mode')
     args = parser.parse_args()
     
     # Use headless mode unless in debug mode
-    headless = not args.debug
+    headless = args.headless if not args.debug else False
     
     # Read locations from CSV
     locations = []
     try:
-        with open('publix_locations.csv', 'r', encoding='utf-8') as file:
+        with open(args.input_file, 'r', encoding='utf-8') as file:
             reader = csv.DictReader(file)
             for row in reader:
                 locations.append(row['location'])
         print(f"Total locations to process: {len(locations)}")
     except Exception as e:
-        print(f"Error reading publix_locations.csv: {e}")
+        print(f"Error reading {args.input_file}: {e}")
         return
-
-    # Filtered URLs with categories matching our target products
     urls = [
         {"url": "https://delivery.publix.com/store/publix/collections/n-beef-17864", "category": "Beef"},
         {"url": "https://delivery.publix.com/store/publix/collections/n-bread-15280", "category": "Bread"},
@@ -574,12 +604,11 @@ def main():
         {"url": "https://delivery.publix.com/store/publix/collections/n-trash-bins-bags-84758", "category": "Trash Bins Bags"}
     ]
 
-    # Set up output file
-    timestamp = datetime.now().strftime("%Y%m%d")
-    output_file = f"publix_targeted_data_{timestamp}.csv"
+    # Set up output file with updated headers
+    output_file = args.output_file
     with open(output_file, 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(['Location', 'Category', 'Product Name', 'Price', 'Ounces', 'Date'])
+        writer.writerow(['ID', 'Store ID', 'Location', 'Category', 'Product Name', 'Price', 'Size', 'Date'])
 
     # Create a lock for file access
     manager = multiprocessing.Manager()

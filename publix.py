@@ -408,7 +408,9 @@ def process_location(location_data, urls, output_file, lock, headless=True):
             )
             page = context.new_page()
             
-            # Start at storefront with retry logic
+            # Generate store ID for this location
+            store_id = generate_store_id(location)
+            
             if not navigate_with_retry(page, "https://delivery.publix.com/store/publix/storefront"):
                 browser.close()
                 return

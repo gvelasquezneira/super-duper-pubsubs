@@ -1,0 +1,229 @@
+name: Publix Data Collection (Staggered)
+
+on:
+  workflow_dispatch:
+    inputs:
+      batch:
+        description: 'Batch to process (1, 2, or 3)'
+        required: true
+        default: '1'
+  schedule:
+    - cron: '0 8 * * *'  # Team 1
+    - cron: '1 2 * * *'  # Team 2
+    - cron: '1 10 * * *' # Team 3
+
+jobs:
+  determine-batch:
+    runs-on: ubuntu-latest
+    outputs:
+      batch: ${{ steps.set-batch.outputs.batch }}
+    steps:
+      - id: set-batch
+        run: |
+          # If manually triggered, use the input batch
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "batch=${{ github.event.inputs.batch }}" >> $GITHUB_OUTPUT
+          else
+            # If scheduled, determine batch based on the hour
+            HOUR=$(date +%H)
+            if [[ $HOUR -lt 10 ]]; then
+              echo "batch=1" >> $GITHUB_OUTPUT
+            elif [[ $HOUR -lt 20 ]]; then
+              echo "batch=2" >> $GITHUB_OUTPUT
+            else
+              echo "batch=3" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+  setup:
+    needs: determine-batch
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.create-matrix.outputs.matrix }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Determine location range for this batch
+        id: create-matrix
+        run: |
+          BATCH="${{ needs.determine-batch.outputs.batch }}"
+          echo "Processing batch $BATCH"
+          
+          # Split the locations file based on batch
+          python3 -c "
+import csv, sys, os
+
+batch = int('$BATCH')
+locations = []
+
+# Read all locations
+with open('publix_locations.csv', 'r') as f:
+  reader = csv.reader(f)
+  header = next(reader)  # Skip header
+  locations = list(reader)
+
+total_locs = len(locations)
+batch_size = 300
+
+# Calculate start and end for this batch
+start_idx = (batch - 1) * batch_size
+end_idx = min(batch * batch_size, total_locs)
+batch_locs = locations[start_idx:end_idx]
+
+print(f'Batch {batch}: Processing locations {start_idx+1}-{end_idx} out of {total_locs}')
+
+# Create directory for split files
+os.makedirs('temp_locations', exist_ok=True)
+
+# Split into 5 parts
+workers = 5
+locs_per_worker = (len(batch_locs) + workers - 1) // workers
+
+for i in range(workers):
+    worker_start = i * locs_per_worker
+    worker_end = min(worker_start + locs_per_worker, len(batch_locs))
+    
+    worker_locs = batch_locs[worker_start:worker_end]
+    
+    # Create file with header
+    with open(f'temp_locations/part_{i+1}.csv', 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+        writer.writerows(worker_locs)
+    
+    print(f'Created part_{i+1}.csv with {len(worker_locs)} locations')
+
+# Create matrix output
+print('matrix={\"part\":[1,2,3,4,5]}')
+"
+          echo "matrix={\"part\":[1,2,3,4,5]}" >> $GITHUB_OUTPUT
+          
+      - name: Upload location parts
+        uses: actions/upload-artifact@v4
+        with:
+          name: location-parts-batch-${{ needs.determine-batch.outputs.batch }}
+          path: temp_locations/
+          retention-days: 1
+
+  scrape:
+    needs: setup
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{fromJson(needs.setup.outputs.matrix)}}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Download location parts
+        uses: actions/download-artifact@v4
+        with:
+          name: location-parts-batch-${{ needs.determine-batch.outputs.batch }}
+          path: temp_locations
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install playwright
+          python -m playwright install chromium
+          python -m playwright install-deps
+
+      - name: Verify and process file
+        run: |
+          echo "Processing part ${{ matrix.part }}"
+          
+          # Find the file to process
+          PART_FILE=$(ls temp_locations/part_${{ matrix.part }}* 2>/dev/null || echo "")
+          
+          if [ -z "$PART_FILE" ]; then
+            echo "No file found for part ${{ matrix.part }}"
+            echo "Available files:"
+            ls -la temp_locations/
+            exit 0  # Skip this job if no file exists
+          fi
+          
+          echo "Found file: $PART_FILE"
+          echo "Number of locations: $(tail -n +2 "$PART_FILE" | wc -l)"
+          
+          # Copy to input locations
+          cp "$PART_FILE" input_locations.csv
+          
+          # Run scraper with this part's locations
+          python publix.py --input_file input_locations.csv --output_file "results_${{ matrix.part }}.csv" --workers 1 --headless true
+          
+          # Check results
+          if [ -f "results_${{ matrix.part }}.csv" ]; then
+            echo "Results file created with $(wc -l < results_${{ matrix.part }}.csv) lines"
+          else
+            echo "Warning: No results file was created!"
+            # Create empty file to avoid errors in later steps
+            echo "ID,Store ID,Location,Category,Product Name,Price,Size,Date" > "results_${{ matrix.part }}.csv"
+          fi
+
+      - name: Upload part results
+        uses: actions/upload-artifact@v4
+        with:
+          name: publix-data-batch-${{ needs.determine-batch.outputs.batch }}-part-${{ matrix.part }}
+          path: results_${{ matrix.part }}.csv
+          retention-days: 30
+
+  combine:
+    needs: scrape
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Download all results
+        uses: actions/download-artifact@v4
+        with:
+          path: ./results
+          pattern: publix-data-batch-*
+          merge-multiple: true
+      
+      - name: Combine results
+        run: |
+          mkdir -p combined
+          DATE=$(date +%Y%m%d)
+          
+          # List all result files
+          echo "Found result files:"
+          find ./results -name "*.csv" | sort
+          
+          # Create header in output file
+          echo "ID,Store ID,Location,Category,Product Name,Price,Size,Date" > "combined/publix_targeted_data_${DATE}_combined.csv"
+          
+          # Append data from all files (skipping headers)
+          for file in $(find ./results -name "*.csv" | sort); do
+            if [ -f "$file" ]; then
+              echo "Processing $file"
+              tail -n +2 "$file" >> "combined/publix_targeted_data_${DATE}_combined.csv"
+            fi
+          done
+          
+          # Count results
+          TOTAL_LINES=$(wc -l < "combined/publix_targeted_data_${DATE}_combined.csv")
+          DATA_LINES=$((TOTAL_LINES - 1))  # Subtract header line
+          echo "Combined file created with $TOTAL_LINES lines ($DATA_LINES data rows)"
+          
+          # Count unique locations
+          UNIQUE_LOCATIONS=$(tail -n +2 "combined/publix_targeted_data_${DATE}_combined.csv" | cut -d',' -f3 | sort | uniq | wc -l)
+          echo "Unique locations in combined results: $UNIQUE_LOCATIONS"
+
+      - name: Upload combined results
+        uses: actions/upload-artifact@v4
+        with:
+          name: publix-combined-data
+          path: combined/publix_targeted_data_*_combined.csv
+          retention-days: 90

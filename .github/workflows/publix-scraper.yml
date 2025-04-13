@@ -13,9 +13,9 @@ on:
           - '2'
           - '3'
   schedule:
-    - cron: '0 9 * * 2'  # Team 1: Tuesday 00:00 UTC
-    - cron: '1 3 * * 2'  # Team 2: Tuesday 06:00 UTC (6 hours later)
-    - cron: '1 9 * * 2' # Team 3: Tuesday 12:00 UTC (12 hours later)
+    - cron: '0 9 * * 0'
+    - cron: '0 3 * * 1' 
+    - cron: '0 12 * * 1' 
 
 jobs:
   determine-team:
@@ -65,51 +65,57 @@ jobs:
           TEAM="${{ needs.determine-team.outputs.team }}"
           echo "Processing team $TEAM"
           
-          # Split the locations file based on team
-          python3 -c "
-import csv, sys, os
+          # Create Python script file instead of inline
+          cat > split_locations.py << 'EOF'
+          import csv
+          import sys
+          import os
 
-team = int('$TEAM')
-locations = []
+          team = int(sys.argv[1])
+          locations = []
 
-# Read all locations
-with open('publix_locations.csv', 'r') as f:
-  reader = csv.reader(f)
-  header = next(reader)  # Skip header
-  locations = list(reader)
+          # Read all locations
+          with open('publix_locations.csv', 'r') as f:
+            reader = csv.reader(f)
+            header = next(reader)  # Skip header
+            locations = list(reader)
 
-total_locs = len(locations)
-# Each team handles 1/3 of the locations
-team_size = (total_locs + 2) // 3  # ceiling division
+          total_locs = len(locations)
+          # Each team handles 1/3 of the locations
+          team_size = (total_locs + 2) // 3  # ceiling division
 
-# Calculate start and end for this team
-start_idx = (team - 1) * team_size
-end_idx = min(start_idx + team_size, total_locs)
-team_locs = locations[start_idx:end_idx]
+          # Calculate start and end for this team
+          start_idx = (team - 1) * team_size
+          end_idx = min(start_idx + team_size, total_locs)
+          team_locs = locations[start_idx:end_idx]
 
-print(f'Team {team}: Processing locations {start_idx+1}-{end_idx} out of {total_locs}')
+          print(f'Team {team}: Processing locations {start_idx+1}-{end_idx} out of {total_locs}')
 
-# Create directory for split files
-os.makedirs('temp_locations', exist_ok=True)
+          # Create directory for split files
+          os.makedirs('temp_locations', exist_ok=True)
 
-# Split into 5 parts within this team's allocation
-workers = 5
-locs_per_worker = (len(team_locs) + workers - 1) // workers  # ceiling division
+          # Split into 5 parts within this team's allocation
+          workers = 5
+          locs_per_worker = (len(team_locs) + workers - 1) // workers  # ceiling division
 
-for i in range(workers):
-    worker_start = i * locs_per_worker
-    worker_end = min(worker_start + locs_per_worker, len(team_locs))
-    
-    worker_locs = team_locs[worker_start:worker_end]
-    
-    # Create file with header
-    with open(f'temp_locations/part_{i+1}.csv', 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(header)
-        writer.writerows(worker_locs)
-    
-    print(f'Created part_{i+1}.csv with {len(worker_locs)} locations')
-"
+          for i in range(workers):
+              worker_start = i * locs_per_worker
+              worker_end = min(worker_start + locs_per_worker, len(team_locs))
+              
+              worker_locs = team_locs[worker_start:worker_end]
+              
+              # Create file with header
+              with open(f'temp_locations/part_{i+1}.csv', 'w', newline='') as f:
+                  writer = csv.writer(f)
+                  writer.writerow(header)
+                  writer.writerows(worker_locs)
+              
+              print(f'Created part_{i+1}.csv with {len(worker_locs)} locations')
+          EOF
+          
+          # Run the Python script with the team number
+          python3 split_locations.py $TEAM
+          
           # Create matrix output for 5 workers
           echo "matrix={\"part\":[1,2,3,4,5]}" >> $GITHUB_OUTPUT
           
@@ -217,90 +223,58 @@ for i in range(workers):
     runs-on: ubuntu-latest
     
     steps:
+      - name: Download team info
+        uses: actions/download-artifact@v4
+        with:
+          name: team-info
+          
+      - name: Get team number
+        id: get-team
+        run: |
+          TEAM=$(cat team_number.txt)
+          echo "team=$TEAM" >> $GITHUB_OUTPUT
+          echo "Using team: $TEAM"
+          
       - name: Download all results
         uses: actions/download-artifact@v4
         with:
           path: ./results
-          pattern: publix-data-team*
+          pattern: publix-data-team${{ steps.get-team.outputs.team }}-worker*
           merge-multiple: true
       
       - name: Combine results
         run: |
           mkdir -p combined
           DATE=$(date +%Y%m%d)
+          TEAM="${{ steps.get-team.outputs.team }}"
           
           # List all result files
           echo "Found result files:"
           find ./results -name "*.csv" | sort
           
           # Create header in output file
-          echo "ID,Store ID,Location,Category,Product Name,Price,Size,Date" > "combined/publix_targeted_data_${DATE}_combined.csv"
+          echo "ID,Store ID,Location,Category,Product Name,Price,Size,Date" > "combined/publix_targeted_data_${DATE}_team${TEAM}_combined.csv"
           
           # Append data from all files (skipping headers)
           for file in $(find ./results -name "*.csv" | sort); do
             if [ -f "$file" ]; then
               echo "Processing $file"
-              tail -n +2 "$file" >> "combined/publix_targeted_data_${DATE}_combined.csv"
+              tail -n +2 "$file" >> "combined/publix_targeted_data_${DATE}_team${TEAM}_combined.csv"
             fi
           done
           
           # Count results
-          TOTAL_LINES=$(wc -l < "combined/publix_targeted_data_${DATE}_combined.csv")
+          TOTAL_LINES=$(wc -l < "combined/publix_targeted_data_${DATE}_team${TEAM}_combined.csv")
           DATA_LINES=$((TOTAL_LINES - 1))  # Subtract header line
           echo "Combined file created with $TOTAL_LINES lines ($DATA_LINES data rows)"
           
           # Count unique locations
-          UNIQUE_LOCATIONS=$(tail -n +2 "combined/publix_targeted_data_${DATE}_combined.csv" | cut -d',' -f3 | sort | uniq | wc -l)
+          UNIQUE_LOCATIONS=$(tail -n +2 "combined/publix_targeted_data_${DATE}_team${TEAM}_combined.csv" | cut -d',' -f3 | sort | uniq | wc -l)
           echo "Unique locations in combined results: $UNIQUE_LOCATIONS"
 
       - name: Upload combined results
         uses: actions/upload-artifact@v4
         with:
-          name: publix-combined-data-team${{ needs.determine-team.outputs.team }}
+          name: publix-combined-data-team${{ steps.get-team.outputs.team }}
           path: combined/publix_targeted_data_*_combined.csv
-          retention-days: 90
-
-  final-combine:
-    if: github.event_name == 'schedule' && github.event.schedule == '0 12 * * 2'  # Only run after Team 3 on schedule
-    needs: [determine-team, combine]
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Download all team results
-        uses: actions/download-artifact@v4
-        with:
-          path: ./team_results
-          pattern: publix-combined-data-team*
-          merge-multiple: true
-      
-      - name: Combine all team results
-        run: |
-          mkdir -p final_combined
-          DATE=$(date +%Y%m%d)
-          
-          # Create header in final output file
-          echo "ID,Store ID,Location,Category,Product Name,Price,Size,Date" > "final_combined/publix_targeted_data_${DATE}_full.csv"
-          
-          # Append data from all team files (skipping headers)
-          for file in $(find ./team_results -name "*.csv" | sort); do
-            if [ -f "$file" ]; then
-              echo "Processing team file: $file"
-              tail -n +2 "$file" >> "final_combined/publix_targeted_data_${DATE}_full.csv"
-            fi
-          done
-          
-          # Count results
-          TOTAL_LINES=$(wc -l < "final_combined/publix_targeted_data_${DATE}_full.csv")
-          DATA_LINES=$((TOTAL_LINES - 1))  # Subtract header line
-          echo "Final combined file created with $TOTAL_LINES lines ($DATA_LINES data rows)"
-          
-          # Count unique locations
-          UNIQUE_LOCATIONS=$(tail -n +2 "final_combined/publix_targeted_data_${DATE}_full.csv" | cut -d',' -f3 | sort | uniq | wc -l)
-          echo "Unique locations in final combined results: $UNIQUE_LOCATIONS"
-
-      - name: Upload final combined results
-        uses: actions/upload-artifact@v4
-        with:
-          name: publix-combined-data-complete
-          path: final_combined/publix_targeted_data_*_full.csv
           retention-days: 90

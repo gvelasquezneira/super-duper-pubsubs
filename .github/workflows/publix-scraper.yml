@@ -7,6 +7,11 @@ on:
         description: 'Batch to process (1, 2, or 3)'
         required: true
         default: '1'
+        type: choice
+        options:
+          - '1'
+          - '2'
+          - '3'
   schedule:
     - cron: '0 8 * * *'  # Team 1
     - cron: '1 2 * * *'  # Team 2
@@ -34,12 +39,17 @@ jobs:
               echo "batch=3" >> $GITHUB_OUTPUT
             fi
           fi
+      
+      - name: Debug batch
+        run: |
+          echo "Selected batch: ${{ steps.set-batch.outputs.batch }}"
 
   setup:
     needs: determine-batch
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.create-matrix.outputs.matrix }}
+      batch: ${{ needs.determine-batch.outputs.batch }}  # Pass batch to next job
     
     steps:
       - name: Checkout code
@@ -54,7 +64,7 @@ jobs:
         id: create-matrix
         run: |
           BATCH="${{ needs.determine-batch.outputs.batch }}"
-          echo "Processing batch $BATCH"
+          echo "Current batch: $BATCH"
           
           # Split the locations file based on batch
           python3 -c "
@@ -99,16 +109,25 @@ for i in range(workers):
         writer.writerows(worker_locs)
     
     print(f'Created part_{i+1}.csv with {len(worker_locs)} locations')
-
-# Create matrix output
-print('matrix={\"part\":[1,2,3,4,5]}')
 "
+          # Create matrix output properly for GitHub Actions
           echo "matrix={\"part\":[1,2,3,4,5]}" >> $GITHUB_OUTPUT
+          
+      - name: Save batch to file
+        run: |
+          echo "${{ needs.determine-batch.outputs.batch }}" > batch_number.txt
+          
+      - name: Upload batch info
+        uses: actions/upload-artifact@v4
+        with:
+          name: batch-info
+          path: batch_number.txt
+          retention-days: 1
           
       - name: Upload location parts
         uses: actions/upload-artifact@v4
         with:
-          name: location-parts-batch-${{ needs.determine-batch.outputs.batch }}
+          name: location-parts
           path: temp_locations/
           retention-days: 1
 
@@ -128,10 +147,22 @@ print('matrix={\"part\":[1,2,3,4,5]}')
         with:
           python-version: '3.10'
 
+      - name: Download batch info
+        uses: actions/download-artifact@v4
+        with:
+          name: batch-info
+          
+      - name: Get batch number
+        id: get-batch
+        run: |
+          BATCH=$(cat batch_number.txt)
+          echo "batch=$BATCH" >> $GITHUB_OUTPUT
+          echo "Using batch: $BATCH"
+
       - name: Download location parts
         uses: actions/download-artifact@v4
         with:
-          name: location-parts-batch-${{ needs.determine-batch.outputs.batch }}
+          name: location-parts
           path: temp_locations
 
       - name: Install dependencies
@@ -143,7 +174,7 @@ print('matrix={\"part\":[1,2,3,4,5]}')
 
       - name: Verify and process file
         run: |
-          echo "Processing part ${{ matrix.part }}"
+          echo "Processing batch ${{ steps.get-batch.outputs.batch }}, part ${{ matrix.part }}"
           
           # Find the file to process
           PART_FILE=$(ls temp_locations/part_${{ matrix.part }}* 2>/dev/null || echo "")
@@ -162,22 +193,23 @@ print('matrix={\"part\":[1,2,3,4,5]}')
           cp "$PART_FILE" input_locations.csv
           
           # Run scraper with this part's locations
-          python publix.py --input_file input_locations.csv --output_file "results_${{ matrix.part }}.csv" --workers 1 --headless true
+          python publix.py --input_file input_locations.csv --output_file "results_${{ steps.get-batch.outputs.batch }}_${{ matrix.part }}.csv" --workers 1 --headless true
           
           # Check results
-          if [ -f "results_${{ matrix.part }}.csv" ]; then
-            echo "Results file created with $(wc -l < results_${{ matrix.part }}.csv) lines"
+          RESULTS_FILE="results_${{ steps.get-batch.outputs.batch }}_${{ matrix.part }}.csv"
+          if [ -f "$RESULTS_FILE" ]; then
+            echo "Results file created with $(wc -l < $RESULTS_FILE) lines"
           else
             echo "Warning: No results file was created!"
             # Create empty file to avoid errors in later steps
-            echo "ID,Store ID,Location,Category,Product Name,Price,Size,Date" > "results_${{ matrix.part }}.csv"
+            echo "ID,Store ID,Location,Category,Product Name,Price,Size,Date" > "$RESULTS_FILE"
           fi
 
       - name: Upload part results
         uses: actions/upload-artifact@v4
         with:
-          name: publix-data-batch-${{ needs.determine-batch.outputs.batch }}-part-${{ matrix.part }}
-          path: results_${{ matrix.part }}.csv
+          name: publix-data-batch${{ steps.get-batch.outputs.batch }}-part${{ matrix.part }}
+          path: results_${{ steps.get-batch.outputs.batch }}_${{ matrix.part }}.csv
           retention-days: 30
 
   combine:
@@ -189,7 +221,7 @@ print('matrix={\"part\":[1,2,3,4,5]}')
         uses: actions/download-artifact@v4
         with:
           path: ./results
-          pattern: publix-data-batch-*
+          pattern: publix-data-batch*
           merge-multiple: true
       
       - name: Combine results

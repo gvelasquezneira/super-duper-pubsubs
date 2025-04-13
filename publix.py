@@ -427,65 +427,86 @@ def process_location(location_data, urls, output_file, lock, headless=True):
 
             # Change location
             try:
-                # Try multiple selectors for the location button
-                location_button_selectors = ["button.e-1v873ap", "button.e-4jnww6"]
-                zip_button = None
+                # Try to click on the location/address selector first
+                location_button_selectors = ["button.e-16343ho", "div.e-1w159j"]
+                print(f"Worker {worker_id}: Trying to change location to {location}")
                 
+                zip_button = None
                 for selector in location_button_selectors:
                     zip_button = page.locator(selector).first
                     if zip_button.count() > 0 and zip_button.is_visible(timeout=1000):
+                        print(f"Worker {worker_id}: Found and clicking location button with selector: {selector}")
                         zip_button.click()
+                        page.wait_for_timeout(800)
                         break
                 
-                if not zip_button or zip_button.count() == 0:
-                    browser.close()
-                    return
+                # Now try to click the "Edit" button in the new interface
+                edit_button = page.locator("div.e-mf50rh").filter(has_text="Edit").first
+                if edit_button.count() > 0 and edit_button.is_visible(timeout=1000):
+                    print(f"Worker {worker_id}: Found and clicking 'Edit' button")
+                    edit_button.click()
+                    page.wait_for_timeout(800)
+                else:
+                    print(f"Worker {worker_id}: 'Edit' button not found or not visible")
+                    # Try some alternative selectors if the Edit div isn't found
+                    alternative_edit_selectors = [
+                        "div:has-text('Edit'):not(:has(div, span))",  # Edit text without nested elements
+                        "div.e-mf50rh",                               # The class you mentioned
+                        "div[role='button']:has-text('Edit')"         # Edit with button role
+                    ]
+                    
+                    for selector in alternative_edit_selectors:
+                        edit_elem = page.locator(selector).first
+                        if edit_elem.count() > 0 and edit_elem.is_visible(timeout=1000):
+                            print(f"Worker {worker_id}: Found and clicking alternative Edit button: {selector}")
+                            edit_elem.click()
+                            page.wait_for_timeout(800)
+                            break
 
                 address_input = page.locator("input#streetAddress").first
+                if address_input.count() == 0:
+                    # Try additional input selectors if the original one isn't found
+                    address_input = page.locator("input[placeholder*='address'], input[aria-label*='address'], input[type='text']:visible").first
                 
                 if address_input.count() > 0:
                     address_input.click()
                     address_input.fill("")
-                    time.sleep(0.3)  # Reduced from 0.5 to improve performance
+                    time.sleep(0.3)
                     address_input.fill(location)
-                    page.wait_for_timeout(800)  # Reduced from 1000 to improve performance
+                    page.wait_for_timeout(800)
 
                     # Try to find suggestions
-                    suggestion = page.locator("ul#address-suggestion-list li[role='option']").first
+                    suggestion = page.locator("ul#address-suggestion-list li[role='option'], div.autocomplete-item").first
                     if suggestion.is_visible():
                         suggestion.click()
-                        page.wait_for_timeout(800)  # Reduced from 1000 to improve performance
+                        page.wait_for_timeout(800)
                     else:
                         print(f"Worker {worker_id}: No suggestions found for {location}, pressing Enter")
                         address_input.press("Enter")
-                        page.wait_for_timeout(800)  # Reduced from 1000 to improve performance
+                        page.wait_for_timeout(800)
                     
                     # Try multiple approaches to find and click the save button
                     save_found = False
                     
-                    # Approach 1: Try the exact selector from the HTML you provided
-                    save_button = page.locator("button.e-129sec0:has(span:text('Save Address'))").first
-                    if save_button.count() > 0 and save_button.is_visible(timeout=1000):
-                        save_button.click()
-                        save_found = True
+                    # Updated save button selectors
+                    save_button_selectors = [
+                        "button.e-129sec0:has(span:text('Save Address'))",
+                        "button.e-129sec0", 
+                        "button.e-y9ioae", 
+                        "button:has-text('Save Address')",
+                        "button:has-text('Save')",
+                        "button[type='submit']"
+                    ]
                     
-                    # Approach 2: Try specific selectors
-                    if not save_found:
-                        save_button_selectors = [
-                            "button.e-129sec0", 
-                            "button.e-y9ioae", 
-                            "button:has-text('Save Address')",
-                            "button[type='submit']"
-                        ]
-                        
-                        for selector in save_button_selectors:
-                            save_button = page.locator(selector).first
-                            if save_button.count() > 0 and save_button.is_visible(timeout=1000):
-                                save_button.click()
-                                save_found = True
-                                break
+                    for selector in save_button_selectors:
+                        save_button = page.locator(selector).first
+                        if save_button.count() > 0 and save_button.is_visible(timeout=1000):
+                            save_button.click()
+                            save_found = True
+                            print(f"Worker {worker_id}: Clicked save button with selector: {selector}")
+                            break
                     
-                    # Approach 3: If no specific selector worked, try to find any visible button
+                    # Approach for any visible button with save-like text
                     if not save_found:
                         buttons = page.locator("button").all()
                         for button in buttons:
@@ -495,16 +516,19 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                                     if any(keyword in button_text.lower() for keyword in ["save", "done", "confirm", "submit", "address"]):
                                         button.click()
                                         save_found = True
+                                        print(f"Worker {worker_id}: Clicked button with text: {button_text}")
                                         break
                             except:
                                 continue
                     
                     # Wait for page to update with new location
-                    page.wait_for_timeout(1500)  # Reduced from 2000 to improve performance
+                    page.wait_for_timeout(1500)
                 else:
+                    print(f"Worker {worker_id}: Could not find address input field")
                     browser.close()
                     return
             except Exception as e:
+                print(f"Worker {worker_id}: Error changing location: {str(e)}")
                 browser.close()
                 return
 
@@ -560,7 +584,7 @@ def main():
     parser = argparse.ArgumentParser(description='Scrape Publix product data')
     parser.add_argument('--input_file', type=str, default='publix_locations.csv', help='Input CSV with locations')
     parser.add_argument('--output_file', type=str, default=f'publix_targeted_data_{datetime.now().strftime("%Y%m%d")}.csv', help='Output CSV file')
-    parser.add_argument('--workers', type=int, default=2, help='Number of worker processes (0=auto)')
+    parser.add_argument('--workers', type=int, default=1, help='Number of worker processes (0=auto)')
     parser.add_argument('--debug', action='store_true', help='Run in debug mode (slower, more verbose)')
     parser.add_argument('--headless', type=lambda x: (str(x).lower() in ['true', '1']), default=True, help='Run in headless mode')
     args = parser.parse_args()

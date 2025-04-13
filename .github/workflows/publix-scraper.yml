@@ -9,8 +9,8 @@ on:
         default: '1'
   schedule:
     - cron: '0 8 * * *'  # Team 1
-    - cron: '1 2 * * *' # Team 2
-    - cron: '1 10 * * *' # Team 3
+    - cron: '1 3 * * *'  # Team 2
+    - cron: '1 11 * * *' # Team 3
 
 jobs:
   determine-batch:
@@ -101,8 +101,9 @@ for i in range(workers):
     print(f'Created part_{i+1}.csv with {len(worker_locs)} locations')
 
 # Create matrix output
-print('::set-output name=matrix::' + '{\"part\":[1,2,3,4,5]}')
+print('matrix={\"part\":[1,2,3,4,5]}')
 "
+          echo "matrix={\"part\":[1,2,3,4,5]}" >> $GITHUB_OUTPUT
           
       - name: Upload location parts
         uses: actions/upload-artifact@v4
@@ -110,8 +111,6 @@ print('::set-output name=matrix::' + '{\"part\":[1,2,3,4,5]}')
           name: location-parts-batch-${{ needs.determine-batch.outputs.batch }}
           path: temp_locations/
           retention-days: 1
-
-  # The rest of your workflow remains similar, but use batch info when downloading artifacts
 
   scrape:
     needs: setup
@@ -132,7 +131,7 @@ print('::set-output name=matrix::' + '{\"part\":[1,2,3,4,5]}')
       - name: Download location parts
         uses: actions/download-artifact@v4
         with:
-          name: location-parts
+          name: location-parts-batch-${{ needs.determine-batch.outputs.batch }}
           path: temp_locations
 
       - name: Install dependencies
@@ -177,7 +176,7 @@ print('::set-output name=matrix::' + '{\"part\":[1,2,3,4,5]}')
       - name: Upload part results
         uses: actions/upload-artifact@v4
         with:
-          name: publix-data-${{ matrix.part }}
+          name: publix-data-batch-${{ needs.determine-batch.outputs.batch }}-part-${{ matrix.part }}
           path: results_${{ matrix.part }}.csv
           retention-days: 30
 
@@ -190,7 +189,7 @@ print('::set-output name=matrix::' + '{\"part\":[1,2,3,4,5]}')
         uses: actions/download-artifact@v4
         with:
           path: ./results
-          pattern: publix-data-*
+          pattern: publix-data-batch-*
           merge-multiple: true
       
       - name: Combine results

@@ -11,6 +11,36 @@ import argparse
 import hashlib
 import re
 
+# Define a list of user agents to rotate between
+USER_AGENTS = [
+    # Chrome on Windows
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    
+    # Firefox on Windows
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:122.0) Gecko/20100101 Firefox/122.0",
+    
+    # Edge on Windows
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 Edg/122.0.0.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36 Edg/121.0.0.0",
+    
+    # Safari on macOS
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Safari/605.1.15",
+    
+    # Chrome on macOS
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36",
+    
+    # Mobile user agents
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_3_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (iPad; CPU OS 17_3_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3.1 Mobile/15E148 Safari/604.1",
+    "Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.90 Mobile Safari/537.36",
+    "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.6261.90 Mobile Safari/537.36",
+]
+
 # Define the target products to find in each category
 TARGET_PRODUCTS = {
     "Beef": [
@@ -227,7 +257,9 @@ def scroll_to_load_all_items(page):
     while scroll_attempts < max_scroll_attempts:
         page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
         
-        page.wait_for_timeout(800)  
+        # Add randomized delay between scrolls to appear more human-like
+        page.wait_for_timeout(random.randint(700, 1200))  
+        
         new_height = page.evaluate("document.body.scrollHeight")
         if new_height == last_height:
             page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
@@ -243,21 +275,31 @@ def scroll_to_load_all_items(page):
         load_more = page.locator("button:has-text('Load More')").first
         if load_more.count() > 0 and load_more.is_visible():
             load_more.click()
+            # Wait longer after clicking "Load More"
+            page.wait_for_timeout(random.randint(1200, 2000))
     except Exception as e:
         pass 
 
-def navigate_with_retry(page, url, max_retries=2): 
-    """Navigate to URL with retry logic"""
+def navigate_with_retry(page, url, max_retries=3):
+    """Navigate to URL with retry logic and exponential backoff"""
     for attempt in range(max_retries):
         try:
             page.goto(url, wait_until="domcontentloaded")
-            page.wait_for_timeout(800) 
+            
+            # Add randomized delay to appear more human-like
+            wait_time = random.uniform(1.0, 3.0)  # More substantial wait after navigation
+            time.sleep(wait_time)
+            
             if page.url.startswith(url.split("?")[0]):  
                 return True
             else:
-                pass
+                # If we're redirected, wait longer before retrying
+                time.sleep(random.uniform(3.0, 5.0))
         except Exception as e:
-            pass
+            # Implement exponential backoff
+            backoff_time = (2 ** attempt) + random.uniform(0.5, 1.5)
+            print(f"Navigation attempt {attempt+1} failed. Waiting {backoff_time:.2f}s before retry...")
+            time.sleep(backoff_time)
     
     print(f"Failed to navigate to {url} after {max_retries} attempts")
     return False
@@ -290,7 +332,6 @@ def generate_store_id(location):
     """Generate a consistent unique ID for a store location."""
     # Use MD5 hash of location string to generate a unique but consistent ID
     hash_obj = hashlib.md5(location.encode())
-
     return hash_obj.hexdigest()[:8]
 
 def scrape_deli_items(page, location, category, store_id):
@@ -400,16 +441,30 @@ def process_location(location_data, urls, output_file, lock, headless=True):
     location, worker_id = location_data
     
     try:
+        # Select a random user agent
+        user_agent = random.choice(USER_AGENTS)
+        print(f"Worker {worker_id}: Using user agent: {user_agent}")
+        
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch(headless=headless)
+            
+            # Create context with the randomized user agent and viewport
+            viewport_width = random.randint(1280, 1920)
+            viewport_height = random.randint(800, 1080)
+            
             context = browser.new_context(
                 permissions=["geolocation"],
-                viewport={"width": 1280, "height": 800}
+                viewport={"width": viewport_width, "height": viewport_height},
+                user_agent=user_agent
             )
+            
             page = context.new_page()
             
             # Generate store ID for this location
             store_id = generate_store_id(location)
+            
+            # Add some randomness to timings to appear more human-like
+            page.set_default_timeout(30000)  # Generous timeout for operations
             
             if not navigate_with_retry(page, "https://delivery.publix.com/store/publix/storefront"):
                 browser.close()
@@ -420,8 +475,8 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                 continue_button = page.get_by_role("button", name="Confirm")
                 if continue_button.is_visible():
                     continue_button.click()
-                else:
-                    pass
+                    # Add random delay after clicking button
+                    time.sleep(random.uniform(1.0, 2.0))
             except Exception as e:
                 print(f"Error with Confirm button for {location}: {e}")
 
@@ -437,7 +492,8 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                     if zip_button.count() > 0 and zip_button.is_visible(timeout=1000):
                         print(f"Worker {worker_id}: Found and clicking location button with selector: {selector}")
                         zip_button.click()
-                        page.wait_for_timeout(800)
+                        # Add random delay after clicking
+                        time.sleep(random.uniform(0.8, 1.5))
                         break
                 
                 # Now try to click the "Edit" button in the new interface
@@ -445,7 +501,8 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                 if edit_button.count() > 0 and edit_button.is_visible(timeout=1000):
                     print(f"Worker {worker_id}: Found and clicking 'Edit' button")
                     edit_button.click()
-                    page.wait_for_timeout(800)
+                    # Add random delay after clicking
+                    time.sleep(random.uniform(0.8, 1.5))
                 else:
                     print(f"Worker {worker_id}: 'Edit' button not found or not visible")
                     # Try some alternative selectors if the Edit div isn't found
@@ -460,7 +517,8 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                         if edit_elem.count() > 0 and edit_elem.is_visible(timeout=1000):
                             print(f"Worker {worker_id}: Found and clicking alternative Edit button: {selector}")
                             edit_elem.click()
-                            page.wait_for_timeout(800)
+                            # Add random delay after clicking
+                            time.sleep(random.uniform(0.8, 1.5))
                             break
 
                 address_input = page.locator("input#streetAddress").first
@@ -470,20 +528,25 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                 
                 if address_input.count() > 0:
                     address_input.click()
+                    # Type more like a human with variable delays between characters
                     address_input.fill("")
-                    time.sleep(0.3)
-                    address_input.fill(location)
-                    page.wait_for_timeout(800)
+                    time.sleep(random.uniform(0.2, 0.4))
+                    
+                    # Type the address with human-like timing
+                    for char in location:
+                        address_input.type(char, delay=random.randint(30, 100))
+                    
+                    time.sleep(random.uniform(0.8, 1.5))
 
                     # Try to find suggestions
                     suggestion = page.locator("ul#address-suggestion-list li[role='option'], div.autocomplete-item").first
                     if suggestion.is_visible():
                         suggestion.click()
-                        page.wait_for_timeout(800)
+                        time.sleep(random.uniform(0.8, 1.5))
                     else:
                         print(f"Worker {worker_id}: No suggestions found for {location}, pressing Enter")
                         address_input.press("Enter")
-                        page.wait_for_timeout(800)
+                        time.sleep(random.uniform(1.0, 2.0))
                     
                     # Try multiple approaches to find and click the save button
                     save_found = False
@@ -521,8 +584,8 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                             except:
                                 continue
                     
-                    # Wait for page to update with new location
-                    page.wait_for_timeout(1500)
+                    # Wait longer for page to update with new location
+                    time.sleep(random.uniform(1.5, 3.0))
                 else:
                     print(f"Worker {worker_id}: Could not find address input field")
                     browser.close()
@@ -532,9 +595,9 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                 browser.close()
                 return
 
-            # Scrape URLs
+            # Scrape URLs with added delays between categories
             all_data = []
-            for url_info in urls:
+            for url_index, url_info in enumerate(urls):
                 url = url_info["url"]
                 category = url_info["category"]
                 
@@ -543,19 +606,24 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                     continue
                 
                 try:
+                    print(f"Worker {worker_id}: Processing category {category} ({url_index+1}/{len(urls)})")
+                    
+                    # Wait longer between categories
+                    if url_index > 0:
+                        delay = random.uniform(2.0, 4.0)
+                        print(f"Worker {worker_id}: Waiting {delay:.1f}s before next category...")
+                        time.sleep(delay)
+                    
                     # Use retry navigation
                     if not navigate_with_retry(page, url):
                         continue
-                    
-                    # Add small random delay to avoid detection
-                    time.sleep(random.uniform(0.5, 1.5))  # Reduced from 1-3 to improve performance
                     
                     # Check for confirm button again after navigation
                     try:
                         continue_button = page.get_by_role("button", name="Confirm")
                         if continue_button.is_visible():
                             continue_button.click()
-                            page.wait_for_timeout(800)  # Reduced from 1000 to improve performance
+                            time.sleep(random.uniform(0.8, 1.5))
                     except:
                         pass
 
@@ -563,7 +631,12 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                     
                     deli_data = scrape_deli_items(page, location, category, store_id)
                     all_data.extend(deli_data)
+                    
+                    # Report progress
+                    print(f"Worker {worker_id}: Found {len(deli_data)} products for {category} in {location}")
+                    
                 except Exception as e:
+                    print(f"Worker {worker_id}: Error processing category {category}: {str(e)}")
                     continue
             
             # Save data for this location
@@ -577,6 +650,7 @@ def process_location(location_data, urls, output_file, lock, headless=True):
             print(f"Worker {worker_id}: Completed processing location: {location}")
     
     except Exception as e:
+        print(f"Worker {worker_id}: Fatal error: {str(e)}")
         print(traceback.format_exc())
 
 def main():
@@ -584,7 +658,7 @@ def main():
     parser = argparse.ArgumentParser(description='Scrape Publix product data')
     parser.add_argument('--input_file', type=str, default='publix_locations.csv', help='Input CSV with locations')
     parser.add_argument('--output_file', type=str, default=f'publix_targeted_data_{datetime.now().strftime("%Y%m%d")}.csv', help='Output CSV file')
-    parser.add_argument('--workers', type=int, default=1, help='Number of worker processes (0=auto)')
+    parser.add_argument('--workers', type=int, default=5, help='Number of worker processes (0=auto)')
     parser.add_argument('--debug', action='store_true', help='Run in debug mode (slower, more verbose)')
     parser.add_argument('--headless', type=lambda x: (str(x).lower() in ['true', '1']), default=True, help='Run in headless mode')
     args = parser.parse_args()

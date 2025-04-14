@@ -6,8 +6,8 @@
 - Scrapes product details from various categories, creating a personal CPI. 
 - Supports parallel processing of multiple locations using Python's multiprocessing.
 - Handles dynamic page loading with scrolling and "Load More" buttons.
-- Saves data to CSV files (one main file and location-specific backups).
-- Includes retry logic for robust navigation and error handling with screenshots for debugging.
+- Saves data to CSV file.
+- Has unique identifiers to build a database. 
 - Automated via GitHub Actions for scheduled runs.
 
 **Prerequisites**

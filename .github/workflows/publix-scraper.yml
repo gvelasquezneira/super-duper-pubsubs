@@ -13,9 +13,9 @@ on:
           - '2'
           - '3'
   schedule:
-    - cron: '0 9 * * 0'
-    - cron: '30 3 * * 1' 
-    - cron: '0 13 * * 1' 
+    - cron: '0 9 * * 0'   # Sunday at 9:00 UTC (Team 1)
+    - cron: '30 3 * * 1'  # Monday at 3:30 UTC (Team 2)
+    - cron: '0 15 * * 1'  # Monday at 13:00 UTC (Team 3)
 
 jobs:
   determine-team:
@@ -29,11 +29,13 @@ jobs:
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
             echo "team=${{ github.event.inputs.team }}" >> $GITHUB_OUTPUT
           else
-            # If scheduled, determine team based on the hour
+            # If scheduled, determine team based on the time
             HOUR=$(date +%H)
-            if [[ $HOUR -lt 6 ]]; then
+            DAY=$(date +%u)  # 7 is Sunday, 1 is Monday...
+            
+            if [[ $DAY -eq 7 ]]; then
               echo "team=1" >> $GITHUB_OUTPUT
-            elif [[ $HOUR -lt 12 ]]; then
+            elif [[ $DAY -eq 1 && $HOUR -lt 10 ]]; then
               echo "team=2" >> $GITHUB_OUTPUT
             else
               echo "team=3" >> $GITHUB_OUTPUT
@@ -94,8 +96,8 @@ jobs:
           # Create directory for split files
           os.makedirs('temp_locations', exist_ok=True)
 
-          # Split into 5 parts within this team's allocation
-          workers = 5
+          # Split into 7 parts within this team's allocation
+          workers = 7
           locs_per_worker = (len(team_locs) + workers - 1) // workers  # ceiling division
 
           for i in range(workers):
@@ -116,8 +118,8 @@ jobs:
           # Run the Python script with the team number
           python3 split_locations.py $TEAM
           
-          # Create matrix output for 5 workers
-          echo "matrix={\"part\":[1,2,3,4,5]}" >> $GITHUB_OUTPUT
+          # Create matrix output for 7 workers
+          echo "matrix={\"part\":[1,2,3,4,5,6,7]}" >> $GITHUB_OUTPUT
           
       - name: Save team to file
         run: |

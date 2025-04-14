@@ -3,7 +3,7 @@
 - The scraper was created to check for price gouging, inflation and to compare local supermarket prices. 
 
 **Features**
-- Scrapes product details from various categories. The 
+- Scrapes product details from various categories, creating a personal CPI. 
 - Supports parallel processing of multiple locations using Python's multiprocessing.
 - Handles dynamic page loading with scrolling and "Load More" buttons.
 - Saves data to CSV files (one main file and location-specific backups).

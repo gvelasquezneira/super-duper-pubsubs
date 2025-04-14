@@ -463,8 +463,6 @@ def process_location(location_data, urls, output_file, lock, headless=True):
             # Generate store ID for this location
             store_id = generate_store_id(location)
             
-            # Add some randomness to timings to appear more human-like
-            page.set_default_timeout(30000)  # Generous timeout for operations
             
             if not navigate_with_retry(page, "https://delivery.publix.com/store/publix/storefront"):
                 browser.close()
@@ -475,8 +473,6 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                 continue_button = page.get_by_role("button", name="Confirm")
                 if continue_button.is_visible():
                     continue_button.click()
-                    # Add random delay after clicking button
-                    time.sleep(random.uniform(1.0, 2.0))
             except Exception as e:
                 print(f"Error with Confirm button for {location}: {e}")
 
@@ -492,8 +488,6 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                     if zip_button.count() > 0 and zip_button.is_visible(timeout=1000):
                         print(f"Worker {worker_id}: Found and clicking location button with selector: {selector}")
                         zip_button.click()
-                        # Add random delay after clicking
-                        time.sleep(random.uniform(0.8, 1.5))
                         break
                 
                 # Now try to click the "Edit" button in the new interface
@@ -501,8 +495,6 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                 if edit_button.count() > 0 and edit_button.is_visible(timeout=1000):
                     print(f"Worker {worker_id}: Found and clicking 'Edit' button")
                     edit_button.click()
-                    # Add random delay after clicking
-                    time.sleep(random.uniform(0.8, 1.5))
                 else:
                     print(f"Worker {worker_id}: 'Edit' button not found or not visible")
                     # Try some alternative selectors if the Edit div isn't found
@@ -517,8 +509,6 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                         if edit_elem.count() > 0 and edit_elem.is_visible(timeout=1000):
                             print(f"Worker {worker_id}: Found and clicking alternative Edit button: {selector}")
                             edit_elem.click()
-                            # Add random delay after clicking
-                            time.sleep(random.uniform(0.8, 1.5))
                             break
 
                 address_input = page.locator("input#streetAddress").first
@@ -530,13 +520,11 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                     address_input.click()
                     # Type more like a human with variable delays between characters
                     address_input.fill("")
-                    time.sleep(random.uniform(0.2, 0.4))
                     
                     # Type the address with human-like timing
                     for char in location:
                         address_input.type(char, delay=random.randint(30, 100))
                     
-                    time.sleep(random.uniform(0.8, 1.5))
 
                     # Try to find suggestions
                     suggestion = page.locator("ul#address-suggestion-list li[role='option'], div.autocomplete-item").first
@@ -546,8 +534,6 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                     else:
                         print(f"Worker {worker_id}: No suggestions found for {location}, pressing Enter")
                         address_input.press("Enter")
-                        time.sleep(random.uniform(1.0, 2.0))
-                    
                     # Try multiple approaches to find and click the save button
                     save_found = False
                     
@@ -583,9 +569,7 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                                         break
                             except:
                                 continue
-                    
-                    # Wait longer for page to update with new location
-                    time.sleep(random.uniform(1.5, 3.0))
+                
                 else:
                     print(f"Worker {worker_id}: Could not find address input field")
                     browser.close()
@@ -610,7 +594,7 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                     
                     # Wait longer between categories
                     if url_index > 0:
-                        delay = random.uniform(2.0, 4.0)
+                        delay = random.uniform(1.0, 2.0)
                         print(f"Worker {worker_id}: Waiting {delay:.1f}s before next category...")
                         time.sleep(delay)
                     
@@ -623,7 +607,6 @@ def process_location(location_data, urls, output_file, lock, headless=True):
                         continue_button = page.get_by_role("button", name="Confirm")
                         if continue_button.is_visible():
                             continue_button.click()
-                            time.sleep(random.uniform(0.8, 1.5))
                     except:
                         pass
 

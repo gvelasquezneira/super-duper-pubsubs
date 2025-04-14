@@ -16,6 +16,6 @@
 - Operating System: Tested on Ubuntu (via GitHub Actions); should work on Windows/Mac with minor adjustments
 
 **Performance**
-- Single Location: ~42 minutes (This is a work in progress).
 - 900 Locations in total.
+- Completes the work in about 18 hours (This is to not hit rate limits)
 - Parallel Processing set up to reduce wait-times.
